@@ -153,6 +153,7 @@ def link_binary(output_o="output.o", output_bin="programa_armv6"):
     try:
         result = subprocess.run([
             "arm-linux-gnueabihf-gcc",
+            "-static",  # ← Enlazado estático
             output_o,
             "-o", output_bin
         ], check=True, capture_output=True, text=True)
@@ -179,6 +180,7 @@ def link_binary(output_o="output.o", output_bin="programa_armv6"):
     except FileNotFoundError:
         print("❌ 'arm-linux-gnueabihf-gcc' no encontrado. Instala con: sudo apt install gcc-arm-linux-gnueabihf")
         return False
+
 
 
 def main():
