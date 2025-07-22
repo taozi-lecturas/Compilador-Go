@@ -1,3 +1,7 @@
+package main
+
+import "fmt"
+
 func main() {
     var x int = true       // ❌ Tipo incorrecto
     var y bool = 42        // ❌ Tipo incorrecto

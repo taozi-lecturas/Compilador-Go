@@ -35,10 +35,9 @@ class CodeGen:
         self.declare_main()
 
     def declare_printf(self):
-        """Declara printf para usar en print/println"""
-        # int printf(const char* format, ...)
-        fmt_ty = STRING_TYPE
-        printf_ty = ir.FunctionType(INT_TYPE, [fmt_ty], var_arg=True)
+        """Declara printf correctamente"""
+        # int printf(i8*, ...)
+        printf_ty = ir.FunctionType(INT_TYPE, [STRING_TYPE], var_arg=True)
         printf = ir.Function(self.module, printf_ty, name="printf")
         self.printf = printf
 
@@ -352,3 +351,26 @@ class CodeGen:
                 raise RuntimeError(f"Tipo no soportado en print: {arg}")
         else:
             raise RuntimeError(f"Función no soportada: {node.func_name}")
+        
+    def print_clean_ir(self):
+        """Imprime el IR sin nombres internos ni metadatos"""
+        lines = str(self.module).splitlines()
+        clean_lines = []
+        for line in lines:
+            # Eliminar comentarios
+            if '!' in line and not line.startswith('!'):
+                continue
+            # Eliminar nombres temporales como %".1", pero mantener %printf
+            if 'declare' in line and 'printf' in line:
+                clean_lines.append('declare i32 @printf(i8*, ...)')
+            elif '@fmt.' in line or '@str.' in line:
+                # Mantener constantes, pero limpiar posible metadata
+                if 'private constant' in line:
+                    clean_lines.append(line.split(',')[0] + '}')
+                else:
+                    clean_lines.append(line)
+            else:
+                # Eliminar nombres de temporales si están entre comillas
+                cleaned = line.replace('"', '')
+                clean_lines.append(cleaned)
+        return '\n'.join(clean_lines)
