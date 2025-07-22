@@ -105,7 +105,7 @@ def parse_file(filepath, output_dir="output"):
         o_filename = os.path.join(output_dir, f"{base_name}.o")
         if emit_object_file(cg, output_ll=ll_filename, output_o=o_filename):
             # Enlazar binario
-            bin_filename = os.path.join(output_dir, f"{base_name}_armv6")
+            bin_filename = os.path.join(output_dir, f"{base_name}_armv7")
             link_binary(output_o=o_filename, output_bin=bin_filename)
 
     except Exception as e:
@@ -116,21 +116,20 @@ def parse_file(filepath, output_dir="output"):
 
 
 def emit_object_file(cg, output_ll="output.ll", output_o="output.o"):
-    """Genera el archivo .o usando llc, compatible con arm-linux-gnueabihf"""
-    print(f"\n🔧 Emitiendo código objeto: {output_o} (ARMv6 + hard-float)")
+    """Genera archivo .o para ARMv7 + hard-float usando llc"""
+    print(f"\n🔧 Emitiendo código objeto: {output_o} (ARMv7 + hard-float)")
 
-    # Guardar el IR
+    # Guardar LLVM IR
     with open(output_ll, "w") as f:
         f.write(str(cg.module))
 
     try:
-        # 🔧 Añadir opciones clave para compatibilidad con gnueabihf
         result = subprocess.run([
             "llc",
-            "-march=arm",
-            "-mcpu=generic",                # Soporta ARMv6
-            "-mattr=+vfp2",                 # Habilita VFP (requerido por gnueabihf)
-            "-float-abi=hard",              # Clave: hard-float ABI
+            "-march=arm",                       # Arquitectura ARM
+            "-mtriple=armv7l-linux-gnueabihf",  # Triple clave: little-endian ARMv7 + hf
+            "-mcpu=cortex-a7",                  # CPU común de ARMv7
+            "-float-abi=hard",                  # ABI con FPU
             "-filetype=obj",
             output_ll,
             "-o", output_o
@@ -138,47 +137,52 @@ def emit_object_file(cg, output_ll="output.ll", output_o="output.o"):
 
         print(f"✅ Archivo objeto generado: {output_o}")
         return True
+
     except subprocess.CalledProcessError as e:
         print(f"❌ Error en llc: {e.stderr}")
-        print(f"📝 Salida completa: {e.stdout}")
+        print(f"📝 Salida: {e.stdout}")
         return False
     except FileNotFoundError:
         print("❌ 'llc' no encontrado. Instala LLVM: sudo apt install llvm")
         return False
 
-def link_binary(output_o="output.o", output_bin="programa_armv6"):
-    """Enlaza el objeto en un binario ejecutable ARMv6"""
+def link_binary(output_o="output.o", output_bin="programa_armv7"):
+    """Enlaza el objeto en un binario estático ARMv7"""
     print(f"\n🔗 Enlazando binario: {output_bin}")
 
     try:
         result = subprocess.run([
             "arm-linux-gnueabihf-gcc",
-            "-static",  # ← Enlazado estático
+            "-static",              # Sin dependencias dinámicas
+            "-march=armv7-a",       # Objetivo: ARMv7-A
+            "-mfpu=vfpv3-d16",      # FPU requerido
+            "-mfloat-abi=hard",     # Hard-float ABI
             output_o,
             "-o", output_bin
         ], check=True, capture_output=True, text=True)
 
         print(f"✅ Binario generado: {output_bin}")
 
-        # Mostrar info básica
+        # Mostrar info básica del binario
         try:
             objdump = subprocess.run(
-                ["arm-linux-gnueabihf-readelf", "-h", output_bin],
+                ["arm-linux-gnueabihf-readelf", "-A", output_bin],
                 capture_output=True, text=True, check=True
             )
-            lines = objdump.stdout.strip().splitlines()
-            for line in lines[:7]:
-                if any(kw in line for kw in ["Class", "Machine", "Entry point"]):
+            attrs = objdump.stdout.strip()
+            for line in attrs.splitlines():
+                if "Tag_CPU_arch" in line or "Tag_FP_arch" in line or "Tag_ABI_VFP_args" in line:
                     print(f"   {line.strip()}")
         except:
             pass
 
         return True
+
     except subprocess.CalledProcessError as e:
         print(f"❌ Error en enlazado: {e.stderr}")
         return False
     except FileNotFoundError:
-        print("❌ 'arm-linux-gnueabihf-gcc' no encontrado. Instala con: sudo apt install gcc-arm-linux-gnueabihf")
+        print("❌ 'arm-linux-gnueabihf-gcc' no encontrado. Instala: sudo apt install gcc-arm-linux-gnueabihf")
         return False
 
 
