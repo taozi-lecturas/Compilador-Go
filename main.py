@@ -6,123 +6,209 @@ from preprocessor import preprocess_source
 from mg_lexer import lexer
 from mg_parser import parser
 from semant import SemanticAnalyzer
-from codegen import CodeGen
+from codegen import CodeGen  # Asegúrate de tener este archivo
 
-OUTPUT_DIR = "output"
 
-def parse_file(filepath, filename_base):
+def parse_file(filepath, output_dir="output"):
+    # Crear directorio de salida si no existe
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Obtener el nombre base del archivo sin extensión
+    base_name = os.path.splitext(os.path.basename(filepath))[0]
+    
     print(f"\n📄 Analizando: {filepath}")
     print("=" * 60)
-
+    
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             code = f.read()
     except Exception as e:
         print(f"❌ Error al leer el archivo: {e}")
-        return
+        return None
 
+    # Preprocesar
     try:
         processed_code = preprocess_source(code)
+        print("✅ Código preprocesado:")
+        print("---")
+        print(processed_code)
+        print("---")
     except Exception as e:
         print(f"❌ Error en preprocesamiento: {e}")
-        return
+        return None
 
+    # Tokenización
     try:
+        print("📝 Tokens generados:")
         lexer.input(processed_code)
-        while lexer.token(): pass
+        has_tokens = False
+        while True:
+            tok = lexer.token()
+            if not tok:
+                break
+            print(tok)
+            has_tokens = True
+        if not has_tokens:
+            print("  (ningún token generado)")
     except Exception as e:
         print(f"❌ Error en tokenización: {e}")
-        return
+        return None
 
+    # Parseo
+    ast = None
     try:
+        print("\n🧩 Generando AST...")
         ast = parser.parse(processed_code, lexer=lexer)
-        if ast is None:
+        if ast is not None:
+            print(ast)
+            print("✅ AST generado exitosamente.")
+        else:
             print("❌ AST es None.")
-            return
+            return None
+    except SyntaxError as e:
+        print(f"❌ Error de sintaxis: {e}")
+        return None
     except Exception as e:
-        print(f"❌ Error en parsing: {e}")
-        return
+        print(f"❌ Error inesperado en parsing: {e}")
+        return None
 
+    # === Análisis semántico ===
     try:
+        print("\n🔍 Análisis semántico...")
         analyzer = SemanticAnalyzer()
-        if not analyzer.analyze(ast):
-            print("❌ Errores semánticos:")
+        if analyzer.analyze(ast):
+            print("✅ Sin errores semánticos.")
+        else:
+            print("❌ Errores semánticos encontrados:")
             for error in analyzer.errors:
                 print(f"  • {error.message}")
-            return
+            return None
     except Exception as e:
         print(f"❌ Error en análisis semántico: {e}")
-        return
+        return None
 
+    # === Generación de código LLVM IR ===
+    print("\n💻 Generando código LLVM IR...")
     try:
         cg = CodeGen()
         cg.compile(ast)
+        print("✅ Código LLVM generado:")
+        print(cg.module)
 
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        ll_path = os.path.join(OUTPUT_DIR, f"{filename_base}.ll")
-        o_path = os.path.join(OUTPUT_DIR, f"{filename_base}.o")
-        bin_path = os.path.join(OUTPUT_DIR, f"{filename_base}.bin")
-
-        with open(ll_path, "w") as f:
+        # Guardar .ll con nombre basado en el archivo de entrada
+        ll_filename = os.path.join(output_dir, f"{base_name}.ll")
+        with open(ll_filename, "w") as f:
             f.write(str(cg.module))
-        print(f"✅ Guardado IR en: {ll_path}")
+        print(f"📄 IR guardado en '{ll_filename}'")
 
-        if emit_object_file(ll_path, o_path):
-            link_binary(o_path, bin_path)
+        # Emitir objeto ARMv6
+        o_filename = os.path.join(output_dir, f"{base_name}.o")
+        if emit_object_file(cg, output_ll=ll_filename, output_o=o_filename):
+            # Enlazar binario
+            bin_filename = os.path.join(output_dir, f"{base_name}_armv6")
+            link_binary(output_o=o_filename, output_bin=bin_filename)
 
     except Exception as e:
         print(f"❌ Error en generación de código: {e}")
-        return
+        return None
 
-def emit_object_file(input_ll, output_o):
-    print(f"🔧 Generando objeto: {output_o}")
+    return ast  # Opcional: si quieres usarlo después
+
+
+def emit_object_file(cg, output_ll="output.ll", output_o="output.o"):
+    """Genera el archivo .o usando llc, compatible con arm-linux-gnueabihf"""
+    print(f"\n🔧 Emitiendo código objeto: {output_o} (ARMv6 + hard-float)")
+
+    # Guardar el IR
+    with open(output_ll, "w") as f:
+        f.write(str(cg.module))
+
     try:
-        subprocess.run([
-            "llc", "-march=arm", "-mcpu=generic", "-mattr=+vfp2",
-            "-float-abi=hard", "-filetype=obj", input_ll, "-o", output_o
+        # 🔧 Añadir opciones clave para compatibilidad con gnueabihf
+        result = subprocess.run([
+            "llc",
+            "-march=arm",
+            "-mcpu=generic",                # Soporta ARMv6
+            "-mattr=+vfp2",                 # Habilita VFP (requerido por gnueabihf)
+            "-float-abi=hard",              # Clave: hard-float ABI
+            "-filetype=obj",
+            output_ll,
+            "-o", output_o
         ], check=True, capture_output=True, text=True)
-        print(f"✅ Objeto generado: {output_o}")
+
+        print(f"✅ Archivo objeto generado: {output_o}")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error en llc:\n{e.stderr}")
+        print(f"❌ Error en llc: {e.stderr}")
+        print(f"📝 Salida completa: {e.stdout}")
         return False
     except FileNotFoundError:
-        print("❌ 'llc' no encontrado. Instale LLVM.")
+        print("❌ 'llc' no encontrado. Instala LLVM: sudo apt install llvm")
         return False
 
-def link_binary(input_o, output_bin):
-    print(f"🔗 Enlazando binario: {output_bin}")
+def link_binary(output_o="output.o", output_bin="programa_armv6"):
+    """Enlaza el objeto en un binario ejecutable ARMv6"""
+    print(f"\n🔗 Enlazando binario: {output_bin}")
+
     try:
-        subprocess.run([
-            "arm-linux-gnueabihf-gcc", input_o, "-o", output_bin
+        result = subprocess.run([
+            "arm-linux-gnueabihf-gcc",
+            output_o,
+            "-o", output_bin
         ], check=True, capture_output=True, text=True)
-        print(f"✅ Binario ARM generado: {output_bin}")
+
+        print(f"✅ Binario generado: {output_bin}")
+
+        # Mostrar info básica
+        try:
+            objdump = subprocess.run(
+                ["arm-linux-gnueabihf-readelf", "-h", output_bin],
+                capture_output=True, text=True, check=True
+            )
+            lines = objdump.stdout.strip().splitlines()
+            for line in lines[:7]:
+                if any(kw in line for kw in ["Class", "Machine", "Entry point"]):
+                    print(f"   {line.strip()}")
+        except:
+            pass
+
         return True
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error en enlazado:\n{e.stderr}")
+        print(f"❌ Error en enlazado: {e.stderr}")
         return False
     except FileNotFoundError:
-        print("❌ 'arm-linux-gnueabihf-gcc' no encontrado.")
+        print("❌ 'arm-linux-gnueabihf-gcc' no encontrado. Instala con: sudo apt install gcc-arm-linux-gnueabihf")
         return False
+
 
 def main():
     tests_dir = "tests"
-    if not os.path.isdir(tests_dir):
+    output_dir = "output"
+    
+    if not os.path.exists(tests_dir):
         print(f"❌ Carpeta '{tests_dir}' no encontrada.")
-        return
+        sys.exit(1)
+    
+    go_files = [f for f in os.listdir(tests_dir) if f.endswith(".go")]
+    
+    if not go_files:
+        print(f"⚠️ No se encontraron archivos '.go' en '{tests_dir}/'")
+        sys.exit(0)
+    
+    print(f"🔍 Encontrados {len(go_files)} archivo(s) para analizar en '{tests_dir}/':")
+    for f in go_files:
+        print(f"  - {f}")
+    
+    # Crear directorio de salida
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Procesar cada archivo
+    for filename in go_files:
+        filepath = os.path.join(tests_dir, filename)
+        parse_file(filepath, output_dir)
+    
+    print("\n🎉 Análisis y generación de código completados.")
 
-    archivos = [f for f in os.listdir(tests_dir) if f.endswith(".go")]
-    if not archivos:
-        print("⚠️ No hay archivos .go en tests/")
-        return
-
-    print(f"🔍 Archivos detectados en tests/: {archivos}")
-    for archivo in archivos:
-        path = os.path.join(tests_dir, archivo)
-        base = os.path.splitext(archivo)[0]
-        parse_file(path, base)
-
-    print("\n🎉 Proceso finalizado para todos los archivos.")
 
 if __name__ == "__main__":
-    main()
+    main()  # ← Todo está dentro de main(), sin código adicional suelto
